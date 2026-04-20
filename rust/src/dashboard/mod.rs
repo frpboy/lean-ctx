@@ -368,8 +368,7 @@ fn route_response(
             ("200 OK", "application/json", json)
         }
         "/api/symbols" => {
-            let root = detect_project_root_for_dashboard();
-            let index = crate::core::graph_index::load_or_build(&root);
+            let index = load_dashboard_graph_index();
             let q = extract_query_param(query_str, "q");
             let kind = extract_query_param(query_str, "kind");
             let json = build_symbols_json(&index, q.as_deref(), kind.as_deref());
