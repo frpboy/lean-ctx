@@ -1740,6 +1740,34 @@ function renderLiveEvents(events, mcp, stats) {
 }
 
 let knowledgeSimulation = null;
+function normalizeKnowledgeItems(data) {
+  const facts = Array.isArray(data && data.facts) ? data.facts.map(f => ({
+    category: f.category || 'FACT',
+    key: f.key || f.category || 'fact',
+    value: f.value || '',
+    confidence: f.confidence || 0.5,
+    source: 'fact',
+    raw: f,
+  })) : [];
+  const patterns = Array.isArray(data && data.patterns) ? data.patterns.map((p, i) => ({
+    category: `PATTERN:${p.pattern_type || 'general'}`,
+    key: p.pattern_type || `pattern-${i + 1}`,
+    value: p.description || '',
+    confidence: 0.72,
+    source: 'pattern',
+    raw: p,
+  })) : [];
+  const history = Array.isArray(data && data.history) ? data.history.map((h, i) => ({
+    category: 'HISTORY',
+    key: `insight-${i + 1}`,
+    value: h.summary || '',
+    confidence: 0.6,
+    source: 'history',
+    raw: h,
+  })) : [];
+  return [...facts, ...patterns, ...history];
+}
+
 async function loadKnowledge() {
   const container = $('view-knowledge');
   if (!container.dataset.built) showLoading(container);
@@ -1747,27 +1775,27 @@ async function loadKnowledge() {
     if (inFlight.get('knowledge')) return;
     inFlight.set('knowledge', true);
     const data = await apiFetch('/api/knowledge', { timeoutMs: 4000 });
-    const facts = data.facts || [];
-    if (!facts.length) {
+    const items = normalizeKnowledgeItems(data);
+    if (!items.length) {
       const root = data.root || data.project_root;
       showEmpty(container, 'No knowledge facts stored yet for this project' + (root ? ` (${root})` : '') + '. LeanCTX builds project knowledge automatically as you work.');
       return;
     }
 
     const catCounts = {};
-    facts.forEach(f => { const c = (f.category || '').split(':')[0].toUpperCase(); catCounts[c] = (catCounts[c]||0)+1; });
-    const avgConf = facts.length ? Math.round(facts.reduce((s,f)=>s+(f.confidence||0),0)/facts.length*100) : 0;
+    items.forEach(f => { const c = (f.category || '').split(':')[0].toUpperCase(); catCounts[c] = (catCounts[c]||0)+1; });
+    const avgConf = items.length ? Math.round(items.reduce((s,f)=>s+(f.confidence||0),0)/items.length*100) : 0;
     container.innerHTML = `
       <div class="row r4" style="margin-bottom:16px">
-        <div class="hc"><div class="hv" style="color:var(--green);font-size:24px">${facts.length}</div><div class="hl">Total Facts</div></div>
+        <div class="hc"><div class="hv" style="color:var(--green);font-size:24px">${items.length}</div><div class="hl">Knowledge Items</div></div>
         <div class="hc"><div class="hv" style="color:var(--purple);font-size:24px">${Object.keys(catCounts).length}</div><div class="hl">Categories</div></div>
         <div class="hc"><div class="hv" style="color:var(--blue);font-size:24px">${avgConf}%</div><div class="hl">Avg Confidence</div></div>
-        <div class="hc"><div class="hv" style="color:var(--yellow);font-size:24px">${facts.filter(f=>(f.confidence||0)>0.8).length}</div><div class="hl">High Confidence</div></div>
+        <div class="hc"><div class="hv" style="color:var(--yellow);font-size:24px">${items.filter(f=>(f.confidence||0)>0.8).length}</div><div class="hl">High Confidence</div></div>
       </div>
       <div class="d3-container" id="knowledgeGraph"></div>
       ${howItWorks('Knowledge Graph', 'LeanCTX maintains a project knowledge base where facts are stored with <strong>confidence scores</strong> that decay over time (unused facts lose confidence). Facts are organized by <strong>category</strong> (Architecture, Testing, etc.) and <strong>room</strong>. Each fact has <strong>temporal validity</strong> &mdash; it knows when it was learned and when it was last confirmed. <strong>Contradiction detection</strong> automatically resolves conflicting facts by preferring the most recent with highest confidence.')}`;
     container.dataset.built = 'true';
-    renderKnowledgeGraph(facts);
+    renderKnowledgeGraph(items);
   } catch (e) {
     showError(container, (e && e.message === 'timeout')
       ? 'Knowledge is still loading. If this persists, restart the dashboard and run a few tool calls to populate facts.'
