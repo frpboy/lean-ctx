@@ -27,6 +27,7 @@ pub fn extract_routes_from_file(file_path: &str, content: &str) -> Vec<RouteEntr
     routes.extend(extract_rails(file_path, content, ext));
     routes.extend(extract_fastapi(file_path, content, ext));
     routes.extend(extract_nextjs(file_path, content, ext));
+    routes.extend(extract_dio(file_path, content, ext));
 
     routes
 }
@@ -60,7 +61,7 @@ fn is_route_candidate(path: &str) -> bool {
         .unwrap_or("");
     matches!(
         ext,
-        "js" | "ts" | "jsx" | "tsx" | "py" | "rs" | "java" | "rb" | "go" | "kt"
+        "js" | "ts" | "jsx" | "tsx" | "py" | "rs" | "java" | "rb" | "go" | "kt" | "dart"
     )
 }
 
@@ -330,6 +331,60 @@ fn extract_nextjs(file: &str, content: &str, ext: &str) -> Vec<RouteEntry> {
         .collect()
 }
 
+fn extract_dio(file: &str, content: &str, ext: &str) -> Vec<RouteEntry> {
+    if ext != "dart" {
+        return Vec::new();
+    }
+
+    let verb_re = Regex::new(
+        r#"\.\s*(get|post|put|patch|delete|head|options)\s*<[^>]*>?\s*\(\s*['"]([^'"]+)['"]"#,
+    )
+    .unwrap();
+    let verb_re_no_generic =
+        Regex::new(r#"\.\s*(get|post|put|patch|delete|head|options)\s*\(\s*['"]([^'"]+)['"]"#)
+            .unwrap();
+    let request_re = Regex::new(
+        r#"\.\s*request\s*<[^>]*>?\s*\(\s*['"]([^'"]+)['"]\s*,.*?method\s*:\s*['"]([A-Za-z]+)['"]"#,
+    )
+    .unwrap();
+    let request_re_no_generic = Regex::new(
+        r#"\.\s*request\s*\(\s*['"]([^'"]+)['"]\s*,.*?method\s*:\s*['"]([A-Za-z]+)['"]"#,
+    )
+    .unwrap();
+
+    let mut routes = Vec::new();
+
+    for (i, line) in content.lines().enumerate() {
+        if let Some(caps) = verb_re
+            .captures(line)
+            .or_else(|| verb_re_no_generic.captures(line))
+        {
+            routes.push(RouteEntry {
+                method: caps[1].to_uppercase(),
+                path: caps[2].to_string(),
+                handler: format!("dio.{}", &caps[1].to_lowercase()),
+                file: file.to_string(),
+                line: i + 1,
+            });
+        }
+
+        if let Some(caps) = request_re
+            .captures(line)
+            .or_else(|| request_re_no_generic.captures(line))
+        {
+            routes.push(RouteEntry {
+                method: caps[2].to_uppercase(),
+                path: caps[1].to_string(),
+                handler: "dio.request".to_string(),
+                file: file.to_string(),
+                line: i + 1,
+            });
+        }
+    }
+
+    routes
+}
+
 fn file_to_nextjs_route(file: &str) -> String {
     let parts: Vec<&str> = file.split('/').collect();
     if let Some(api_pos) = parts.iter().position(|p| *p == "api") {
@@ -477,10 +532,40 @@ mod tests {
     }
 
     #[test]
+    fn dio_get_route_reference() {
+        let code = r#"final res = dio.get('/api/users');"#;
+        let routes = extract_dio("lib/api/client.dart", code, "dart");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].method, "GET");
+        assert_eq!(routes[0].path, "/api/users");
+        assert_eq!(routes[0].handler, "dio.get");
+    }
+
+    #[test]
+    fn dio_post_route_reference_with_generic() {
+        let code = r#"final res = dio.post<Map<String, dynamic>>('/api/items', data: body);"#;
+        let routes = extract_dio("lib/api/client.dart", code, "dart");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].method, "POST");
+        assert_eq!(routes[0].path, "/api/items");
+    }
+
+    #[test]
+    fn dio_request_route_reference_with_explicit_method() {
+        let code = r#"return dio.request('/api/profile', options: Options(method: 'PATCH'));"#;
+        let routes = extract_dio("lib/api/client.dart", code, "dart");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].method, "PATCH");
+        assert_eq!(routes[0].path, "/api/profile");
+        assert_eq!(routes[0].handler, "dio.request");
+    }
+
+    #[test]
     fn ignores_non_route_files() {
         assert!(!is_route_candidate("README.md"));
         assert!(!is_route_candidate("image.png"));
         assert!(is_route_candidate("server.ts"));
         assert!(is_route_candidate("routes.rb"));
+        assert!(is_route_candidate("lib/api/client.dart"));
     }
 }

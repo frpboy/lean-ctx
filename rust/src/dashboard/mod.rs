@@ -388,7 +388,10 @@ fn route_response(
                         .extension()
                         .and_then(|e| e.to_str())
                         .map(|e| {
-                            matches!(e, "js" | "ts" | "py" | "rs" | "java" | "rb" | "go" | "kt")
+                            matches!(
+                                e,
+                                "js" | "ts" | "py" | "rs" | "java" | "rb" | "go" | "kt" | "dart"
+                            )
                         })
                         .unwrap_or(false)
                 })
