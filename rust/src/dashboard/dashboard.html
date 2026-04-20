@@ -1125,6 +1125,12 @@ async function apiFetch(path, opts) {
     path.startsWith('/api/graph') || path.startsWith('/api/search-index') ? 8000 : 3000
   );
   const ctrl = new AbortController();
+  const requestKey = opts && opts.key;
+  if (requestKey) {
+    const prev = inFlight.get(requestKey);
+    if (prev) prev.abort();
+    inFlight.set(requestKey, ctrl);
+  }
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const r = await fetch(path, { signal: ctrl.signal, cache: 'no-store' });
@@ -1135,6 +1141,9 @@ async function apiFetch(path, opts) {
     throw e;
   } finally {
     clearTimeout(t);
+    if (requestKey && inFlight.get(requestKey) === ctrl) {
+      inFlight.delete(requestKey);
+    }
   }
 }
 
@@ -2042,6 +2051,7 @@ let compressionFiles = [];
 let compressionSelected = null;
 let compressionMode = 'map';
 let compressionTask = '';
+let symbolsRequestSeq = 0;
 
 async function loadCompression() {
   const container = $('view-compression');
@@ -2433,13 +2443,15 @@ async function loadSymbols() {
   filterSymbols();
 }
 async function filterSymbols() {
+  const requestSeq = ++symbolsRequestSeq;
   const q = ($('symSearch') || {}).value || '';
   const kind = ($('symKind') || {}).value || '';
   const params = new URLSearchParams();
   if (q) params.set('q', q);
   if (kind) params.set('kind', kind);
   try {
-    const data = await apiFetch('/api/symbols?' + params.toString());
+    const data = await apiFetch('/api/symbols?' + params.toString(), { timeoutMs: 8000, key: 'symbols' });
+    if (requestSeq !== symbolsRequestSeq) return;
     const el = $('symResults');
     if (!el) return;
     if (isBuildingData(data)) {
@@ -2452,7 +2464,10 @@ async function filterSymbols() {
     el.innerHTML = '<table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;font-size:11px;color:var(--dim)"><th style="padding:6px">Name</th><th style="padding:6px">Kind</th><th style="padding:6px">File</th><th style="padding:6px">Lines</th><th style="padding:6px">Vis</th></tr></thead><tbody>'
       + data.map(s => `<tr style="border-top:1px solid var(--border)"><td style="padding:6px;font-family:var(--mono);color:var(--green)">${esc(s.name)}</td><td style="padding:6px"><span style="background:var(--surface-2);padding:2px 6px;border-radius:4px;font-size:11px">${esc(s.kind)}</span></td><td style="padding:6px;font-size:12px;color:var(--dim)">${esc(s.file)}</td><td style="padding:6px;font-size:12px">${s.start_line}-${s.end_line}</td><td style="padding:6px">${s.is_exported ? '⊛' : '−'}</td></tr>`).join('')
       + '</tbody></table>';
-  } catch (e) { showError($('symResults'), 'Could not load symbols.'); }
+  } catch (e) {
+    if (requestSeq !== symbolsRequestSeq) return;
+    showError($('symResults'), (e && e.message === 'timeout') ? 'Symbol loading timed out. Try Refresh.' : 'Could not load symbols.');
+  }
 }
 
 // ─── Call Graph Visualizer ───────────────────────────
