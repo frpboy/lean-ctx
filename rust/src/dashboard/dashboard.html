@@ -2618,19 +2618,34 @@ async function loadRoutes() {
       return;
     }
     const methodColors = { GET: '#34d399', POST: '#60a5fa', PUT: '#fbbf24', PATCH: '#c084fc', DELETE: '#f87171', HEAD: '#94a3b8', OPTIONS: '#94a3b8' };
+    const isClientEndpointCall = r => {
+      const file = (r && r.file ? String(r.file) : '').toLowerCase();
+      const handler = (r && r.handler ? String(r.handler) : '').toLowerCase();
+      return file.endsWith('.dart') || handler.startsWith('dio.');
+    };
+    const serverRoutes = routes.filter(r => !isClientEndpointCall(r));
+    const clientRoutes = routes.filter(isClientEndpointCall);
     const methodCounts = {};
     routes.forEach(r => { methodCounts[r.method] = (methodCounts[r.method]||0)+1; });
+    const renderRouteTable = (title, items, emptyMsg) => `
+      <div class="card" style="margin-bottom:16px">
+        <h3>${title}</h3>
+        ${items.length
+          ? `<div style="overflow-x:auto">
+        <table><thead><tr><th>Method</th><th>Path</th><th>Handler</th><th>File</th><th class="r">Line</th></tr></thead><tbody>`
+            + items.map(r => `<tr><td><span style="background:${methodColors[r.method] || '#6b6b88'}22;color:${methodColors[r.method] || '#6b6b88'};padding:3px 10px;border-radius:4px;font-size:10px;font-weight:700;border:1px solid ${methodColors[r.method] || '#6b6b88'}33">${esc(r.method)}</span></td><td style="font-family:var(--mono);font-size:12px;color:var(--text-bright)">${esc(r.path)}</td><td style="font-size:12px;color:var(--green)">${esc(r.handler || '—')}</td><td style="font-size:11px;color:var(--muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.file)}</td><td class="r">${r.line}</td></tr>`).join('')
+            + `</tbody></table></div>`
+          : `<div class="empty-state" style="padding:24px"><p>${emptyMsg}</p></div>`}
+      </div>`;
     container.innerHTML = `
       <div class="row r4" style="margin-bottom:16px">
         <div class="hc"><div class="hv" style="color:var(--green);font-size:24px">${routes.length}</div><div class="hl">Total Routes</div></div>
+        <div class="hc"><div class="hv" style="color:var(--blue);font-size:24px">${serverRoutes.length}</div><div class="hl">Server Routes</div></div>
+        <div class="hc"><div class="hv" style="color:var(--purple);font-size:24px">${clientRoutes.length}</div><div class="hl">Client Calls</div></div>
         ${Object.entries(methodCounts).slice(0,3).map(([m,c]) => `<div class="hc"><div class="hv" style="color:${methodColors[m]||'#6b6b88'};font-size:24px">${c}</div><div class="hl">${m}</div></div>`).join('')}
       </div>
-      <div class="card">
-        <h3>API Routes</h3>
-        <div style="overflow-x:auto">
-        <table><thead><tr><th>Method</th><th>Path</th><th>Handler</th><th>File</th><th class="r">Line</th></tr></thead><tbody>`
-      + routes.map(r => `<tr><td><span style="background:${methodColors[r.method] || '#6b6b88'}22;color:${methodColors[r.method] || '#6b6b88'};padding:3px 10px;border-radius:4px;font-size:10px;font-weight:700;border:1px solid ${methodColors[r.method] || '#6b6b88'}33">${esc(r.method)}</span></td><td style="font-family:var(--mono);font-size:12px;color:var(--text-bright)">${esc(r.path)}</td><td style="font-size:12px;color:var(--green)">${esc(r.handler || '—')}</td><td style="font-size:11px;color:var(--muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.file)}</td><td class="r">${r.line}</td></tr>`).join('')
-      + `</tbody></table></div></div>`;
+      ${renderRouteTable('Server routes', serverRoutes, 'No server route declarations found.')}
+      ${renderRouteTable('Client endpoint calls', clientRoutes, 'No client endpoint calls found.')}`;
   } catch (e) { showError(container, 'Could not load routes.'); }
 }
 
