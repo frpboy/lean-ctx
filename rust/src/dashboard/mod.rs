@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -336,8 +336,7 @@ fn route_response(
             ("200 OK", "application/json", json)
         }
         "/api/graph" => {
-            let root = detect_project_root_for_dashboard();
-            let index = crate::core::graph_index::load_or_build(&root);
+            let index = load_dashboard_graph_index();
             let json = serde_json::to_string(&index).unwrap_or_else(|_| {
                 "{\"error\":\"failed to serialize project index\"}".to_string()
             });
@@ -409,9 +408,9 @@ fn route_response(
             ("200 OK", "application/json", json)
         }
         "/api/search-index" => {
-            let root_s = detect_project_root_for_dashboard();
-            let root = std::path::Path::new(&root_s);
-            let index = crate::core::vector_index::BM25Index::load_or_build(root);
+            let graph_index = load_dashboard_graph_index();
+            let root = std::path::Path::new(&graph_index.project_root);
+            let index = load_dashboard_search_index(root);
             let summary = bm25_index_summary_json(&index);
             let json = serde_json::to_string(&summary).unwrap_or_else(|_| {
                 "{\"error\":\"failed to serialize search index summary\"}".to_string()
@@ -430,9 +429,9 @@ fn route_response(
                     r#"{"results":[]}"#.to_string(),
                 )
             } else {
-                let root_s = detect_project_root_for_dashboard();
-                let root = std::path::Path::new(&root_s);
-                let index = crate::core::vector_index::BM25Index::load_or_build(root);
+                let graph_index = load_dashboard_graph_index();
+                let root = std::path::Path::new(&graph_index.project_root);
+                let index = load_dashboard_search_index(root);
                 let hits = index.search(&q, limit);
                 let results: Vec<serde_json::Value> = hits
                     .iter()
@@ -457,25 +456,18 @@ fn route_response(
                 None => r#"{"error":"missing path query parameter"}"#.to_string(),
                 Some(rel) => {
                     let task = extract_query_param(query_str, "task");
-                    let root = detect_project_root_for_dashboard();
-                    let root_pb = std::path::Path::new(&root);
                     let rel = normalize_dashboard_demo_path(&rel);
-                    let candidate = std::path::Path::new(&rel);
-                    let full = if candidate.is_absolute() {
-                        candidate.to_path_buf()
-                    } else {
-                        let direct = root_pb.join(&rel);
-                        if direct.exists() {
-                            direct
-                        } else {
-                            let in_rust = root_pb.join("rust").join(&rel);
-                            if in_rust.exists() {
-                                in_rust
-                            } else {
-                                direct
-                            }
-                        }
-                    };
+                    let detected_root = detect_project_root_for_dashboard();
+                    let graph_index = load_dashboard_graph_index();
+                    let mut root_candidates =
+                        vec![std::path::PathBuf::from(&graph_index.project_root)];
+                    if graph_index.project_root != detected_root {
+                        root_candidates.push(std::path::PathBuf::from(&detected_root));
+                    }
+                    if let Ok(cwd) = std::env::current_dir() {
+                        root_candidates.push(cwd);
+                    }
+                    let full = resolve_dashboard_demo_file_path(&rel, &root_candidates);
                     match std::fs::read_to_string(&full) {
                         Ok(content) => {
                             let ext = full.extension().and_then(|e| e.to_str()).unwrap_or("rs");
@@ -665,6 +657,85 @@ fn normalize_dashboard_demo_path(path: &str) -> String {
     trimmed
         .trim_start_matches(['\\', '/'])
         .replace('\\', std::path::MAIN_SEPARATOR_STR)
+}
+
+fn load_dashboard_graph_index() -> crate::core::graph_index::ProjectIndex {
+    let detected_root = detect_project_root_for_dashboard();
+    let mut index = crate::core::graph_index::load_or_build(&detected_root);
+    if dashboard_graph_index_has_missing_files(&index) {
+        index = crate::core::graph_index::scan(&index.project_root);
+    }
+    index
+}
+
+fn dashboard_graph_index_has_missing_files(index: &crate::core::graph_index::ProjectIndex) -> bool {
+    if index.files.is_empty() {
+        return false;
+    }
+
+    let roots = [std::path::PathBuf::from(&index.project_root)];
+    index
+        .files
+        .keys()
+        .any(|path| !resolve_dashboard_demo_file_path(path, &roots).exists())
+}
+
+fn load_dashboard_search_index(root: &Path) -> crate::core::vector_index::BM25Index {
+    let mut index = crate::core::vector_index::BM25Index::load_or_build(root);
+    if dashboard_search_index_has_missing_files(&index, root) {
+        index = crate::core::vector_index::BM25Index::build_from_directory(root);
+        let _ = index.save(root);
+    }
+    index
+}
+
+fn dashboard_search_index_has_missing_files(
+    index: &crate::core::vector_index::BM25Index,
+    root: &Path,
+) -> bool {
+    let roots = [root.to_path_buf()];
+    let mut checked = HashSet::new();
+    for chunk in index.chunks.iter().take(200) {
+        if checked.insert(chunk.file_path.clone())
+            && !resolve_dashboard_demo_file_path(&chunk.file_path, &roots).exists()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn resolve_dashboard_demo_file_path(
+    path: &str,
+    root_candidates: &[std::path::PathBuf],
+) -> std::path::PathBuf {
+    let normalized = normalize_dashboard_demo_path(path);
+    let candidate = Path::new(&normalized);
+    if candidate.is_absolute() || is_windows_absolute_path(&normalized) {
+        return candidate.to_path_buf();
+    }
+
+    let mut attempts = Vec::new();
+    let mut seen = HashSet::new();
+    for root in root_candidates {
+        for attempt in [root.join(&normalized), root.join("rust").join(&normalized)] {
+            let key = attempt.to_string_lossy().to_string();
+            if seen.insert(key) {
+                attempts.push(attempt);
+            }
+        }
+    }
+
+    attempts
+        .iter()
+        .find(|attempt| attempt.exists())
+        .cloned()
+        .unwrap_or_else(|| {
+            attempts
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| candidate.to_path_buf())
+        })
 }
 
 fn is_windows_absolute_path(path: &str) -> bool {
@@ -1059,5 +1130,39 @@ mod tests {
     fn normalize_dashboard_demo_path_preserves_unc_path() {
         let input = r"\\server\share\backend\list_tables.js";
         assert_eq!(normalize_dashboard_demo_path(input), input);
+    }
+
+    #[test]
+    fn resolve_dashboard_demo_file_path_prefers_existing_index_root() {
+        let detected_root = tempfile::tempdir().expect("detected root tempdir");
+        let indexed_root = tempfile::tempdir().expect("indexed root tempdir");
+        let target = indexed_root.path().join("backend").join("apply-org-id.js");
+        std::fs::create_dir_all(target.parent().expect("target parent")).expect("mkdirs");
+        std::fs::write(&target, "console.log('ok');").expect("write target");
+
+        let resolved = resolve_dashboard_demo_file_path(
+            "backend/apply-org-id.js",
+            &[
+                detected_root.path().to_path_buf(),
+                indexed_root.path().to_path_buf(),
+            ],
+        );
+
+        assert_eq!(resolved, target);
+    }
+
+    #[test]
+    fn resolve_dashboard_demo_file_path_handles_rooted_relative_windows_style_paths() {
+        let indexed_root = tempfile::tempdir().expect("indexed root tempdir");
+        let target = indexed_root.path().join("backend").join("list_tables.js");
+        std::fs::create_dir_all(target.parent().expect("target parent")).expect("mkdirs");
+        std::fs::write(&target, "export {};").expect("write target");
+
+        let resolved = resolve_dashboard_demo_file_path(
+            r"\backend\list_tables.js",
+            &[indexed_root.path().to_path_buf()],
+        );
+
+        assert_eq!(resolved, target);
     }
 }
