@@ -1561,3 +1561,30 @@ fn extract_bash_interpreters_from_json() {
     extract_bash_interpreters(&json, &mut out);
     assert_eq!(out, vec!["python3", "node", "ruby"]);
 }
+
+
+/// GH #2149: command substitutions in redirect targets must not make a
+/// subshell look like a command named "(echo". The redirect target is one
+/// shell word, while the subshell body is still checked as a command.
+#[test]
+fn subshell_redirect_targets_with_command_substitution_are_parsed() {
+    let list = allow(&["echo"]);
+    let unquoted = concat!("(echo ok) > /tmp/lc_$", "(echo a).txt");
+    let quoted = concat!(r#"(echo ok) > "/tmp/lc_$"#, "(echo c).txt\"");
+    let control_substitution = concat!("echo ok > /tmp/lc_$", "(echo b).txt");
+    let pipeline = concat!("(echo ok) | cat > /tmp/lc_$", "(echo d).txt");
+
+    for command in [
+        unquoted,
+        quoted,
+        "(echo ok) > /tmp/lc_x.txt",
+        control_substitution,
+        pipeline,
+    ] {
+        let result = check_all_segments(command, &list);
+        assert!(
+            result.is_ok(),
+            "redirect target substitution must not corrupt subshell parsing for {command:?}: {result:?}"
+        );
+    }
+}
