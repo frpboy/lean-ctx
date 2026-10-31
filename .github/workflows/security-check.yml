@@ -120,6 +120,11 @@ jobs:
       - name: Fetch locked crates
         run: cargo fetch --locked --manifest-path rust/Cargo.toml
 
+      # The CLA-v1 signature inventory is kept on the upstream-only
+      # cla-signatures branch. Fork checkouts do not have that ref locally.
+      - name: Fetch upstream CLA signature history
+        run: git fetch --no-tags https://github.com/yvgude/lean-ctx.git refs/heads/cla-signatures:refs/remotes/upstream/cla-signatures
+
       - name: Mixed-license and private-service guard
         run: python3 scripts/license-policy-check.py --root .
 
