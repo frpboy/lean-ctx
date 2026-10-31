@@ -80,7 +80,7 @@ jobs:
         run: python3 -m unittest tests/test_license_policy.py
       - name: Verify commercial-source provenance
         run: |
-          git fetch --no-tags origin cla-signatures:refs/remotes/origin/cla-signatures
+          git fetch --no-tags https://github.com/yvgude/lean-ctx.git refs/heads/cla-signatures:refs/remotes/upstream/cla-signatures
           python3 -m unittest tests/test_ip_provenance_audit.py
           python3 scripts/ip-provenance-audit.py --root .
       - name: Verify dependency licenses and advisories
